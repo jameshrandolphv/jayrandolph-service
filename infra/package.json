@@ -1,0 +1,19 @@
+{
+  "name": "jayrandolph-infra",
+  "version": "0.1.0",
+  "scripts": {
+    "build": "tsc",
+    "watch": "tsc -w",
+    "cdk": "cdk"
+  },
+  "devDependencies": {
+    "aws-cdk": "^2.200.0",
+    "ts-node": "^10.9.0",
+    "typescript": "~5.8.0",
+    "@types/node": "^22.0.0"
+  },
+  "dependencies": {
+    "aws-cdk-lib": "^2.200.0",
+    "constructs": "^10.0.0"
+  }
+}

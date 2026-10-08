@@ -1,12 +1,15 @@
 # CDK
 infra/node_modules/
 infra/dist/
+scripts/node_modules/
 cdk.out/
 
 # Python
 __pycache__/
 *.pyc
 *.pyo
+.pytest_cache/
+.venv/
 .env
 
 # OS

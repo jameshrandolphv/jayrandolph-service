@@ -1,0 +1,12 @@
+{
+  "name": "jayrandolph-photo-tools",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "upload": "node upload-photos.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.700.0",
+    "sharp": "^0.34.0"
+  }
+}

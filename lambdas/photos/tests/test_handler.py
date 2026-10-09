@@ -118,3 +118,25 @@ def test_excludes_files_prefixed_private(handler):
     assert [a["id"] for a in body["albums"]] == ["album"]
     assert [i["id"] for i in body["albums"][0]["images"]] == ["public"]
     assert "private" not in json.dumps(body).lower()
+
+
+def test_returns_folder_path_for_nested_albums(handler):
+    put("albums/trip/album.json", json.dumps({"title": "Trip", "path": ["trip"]}).encode())
+    add_photo("trip", "a")
+    put("albums/trip-day-1/album.json", json.dumps({"title": "Day 1", "path": ["trip", "Day 1"], "camera": "F3"}).encode())
+    add_photo("trip-day-1", "b")
+    put("albums/loose/album.json", json.dumps({"title": "Pics", "path": []}).encode())
+    add_photo("loose", "c")
+    put("albums/legacy/album.json", json.dumps({"title": "Old One"}).encode())
+    add_photo("legacy", "d")
+    put("albums/bad/album.json", json.dumps({"title": "Bad", "path": ["ok", 3]}).encode())
+    add_photo("bad", "e")
+
+    _, body = call(handler)
+    albums = {a["id"]: a for a in body["albums"]}
+    assert albums["trip"]["path"] == ["trip"]
+    assert albums["trip-day-1"]["path"] == ["trip", "Day 1"]
+    assert albums["trip-day-1"]["metadata"] == {"camera": "F3"}
+    assert albums["loose"]["path"] == []
+    assert albums["legacy"]["path"] == ["Old One"]
+    assert albums["bad"]["path"] == ["Bad"]

@@ -2,9 +2,12 @@
 
 Bucket layout (written by scripts/upload-photos.mjs):
 
-    albums/<album-id>/album.json            optional: {"title": "...", ...extra metadata}
+    albums/<album-id>/album.json            optional: {"title": "...", "path": ["folder", ...], ...extra metadata}
     albums/<album-id>/originals/<id>.<ext>  full-size original; user metadata: width, height, title
     albums/<album-id>/thumbs/<id>.webp      thumbnail
+
+"path" is the album's folder path relative to the uploaded source directory, so clients can rebuild the
+folder tree from the flat album list. Albums without a valid path are treated as top-level.
 
 Objects whose file name starts with "private-" (case-insensitive) are never listed or presigned.
 """
@@ -96,6 +99,12 @@ def _title_case(value: str) -> str:
     return re.sub(r"\b\w", lambda m: m.group(0).upper(), re.sub(r"[-_]+", " ", value).strip())
 
 
+def _album_path(value, title: str) -> list[str]:
+    if isinstance(value, list) and all(isinstance(p, str) and p.strip() for p in value):
+        return value
+    return [title]
+
+
 def _presign(key: str) -> str:
     return s3.generate_presigned_url(
         "get_object", Params={"Bucket": _bucket(), "Key": key}, ExpiresIn=_ttl()
@@ -146,6 +155,7 @@ def build_albums() -> list[dict]:
         for album_id, slot in albums.items():
             album_meta = dict(meta_futures[album_id].result() or {}) if album_id in meta_futures else {}
             title = album_meta.pop("title", None)
+            raw_path = album_meta.pop("path", None)
             images = []
             for stem in sorted(slot["originals"], key=_natural):
                 future = image_futures.get((album_id, stem))
@@ -170,10 +180,12 @@ def build_albums() -> list[dict]:
                     }
                 )
             if images:
+                album_title = title if isinstance(title, str) and title.strip() else _title_case(album_id)
                 result.append(
                     {
                         "id": album_id,
-                        "title": title if isinstance(title, str) and title.strip() else _title_case(album_id),
+                        "title": album_title,
+                        "path": _album_path(raw_path, album_title),
                         "metadata": album_meta,
                         "images": images,
                     }

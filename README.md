@@ -11,7 +11,7 @@ Backend for [jayrandolph](https://github.com/jameshrandolphv/jayrandolph): photo
 ## Bucket layout
 
 ```
-albums/<album-id>/album.json            optional {"title": "...", ...any extra metadata}
+albums/<album-id>/album.json            optional {"title": "...", "path": ["folder", ...], ...any extra metadata}
 albums/<album-id>/originals/<id>.<ext>  original; user metadata: width, height, title
 albums/<album-id>/thumbs/<id>.webp      thumbnail
 ```
@@ -30,6 +30,7 @@ Use the upload script rather than uploading by hand: the Lambda skips photos tha
     {
       "id": "2026-09-01-kodak-portra-400",
       "title": "Kodak Portra 400",
+      "path": ["film", "2026-09-01-kodak-portra-400"],
       "metadata": { "camera": "Nikon F3" },
       "images": [
         {
@@ -50,7 +51,7 @@ Use the upload script rather than uploading by hand: the Lambda skips photos tha
 }
 ```
 
-Everything in `album.json` other than `title` is returned as the album's `metadata`. Presigned URLs last `expiresIn` seconds (`PRESIGNED_URL_TTL`, set in `infra/lib/photography-stack.ts`); clients should refetch before `expiresAt` (epoch seconds). The Lambda's temporary credentials can cut a URL's life short, so refetch well before it.
+`path` is the album's folder path under the uploaded source directory (raw folder names). Clients rebuild the folder tree from it: group albums by path prefix, where intermediate folders that hold no images exist only as path segments and an album's own folder is its last segment. `[]` is an album made of images placed directly in the source directory; albums without a stored path (uploaded earlier) come back as top-level, `[title]`. Everything in `album.json` other than `title` and `path` is returned as the album's `metadata`. Presigned URLs last `expiresIn` seconds (`PRESIGNED_URL_TTL`, set in `infra/lib/photography-stack.ts`); clients should refetch before `expiresAt` (epoch seconds). The Lambda's temporary credentials can cut a URL's life short, so refetch well before it.
 
 ## Deploy
 
@@ -65,7 +66,7 @@ The `ApiUrl` and `PhotosBucketName` outputs go into the site config and the uplo
 
 ## Upload photos
 
-Source directory: one folder per album, images inside (jpg, jpeg, png, webp, avif); an optional `album.json` with `{ "title": "…" }`.
+Source directory: any folder structure, searched recursively for images (jpg, jpeg, png, webp, avif). Each folder that directly contains images becomes one album, with the slugified relative path as its ID (`trip/Day 1` → `trip-day-1`); images directly in the source directory form an album named after it. The folder path is stored in each album's `album.json` as `path`. An optional `album.json` in a folder sets `{ "title": "…" }` (default: the folder name, e.g. `Day 1`).
 
 ```bash
 cd scripts && npm install

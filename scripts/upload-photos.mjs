@@ -1,10 +1,13 @@
-// Uploads <dir>/<album>/* to the photos bucket as originals plus generated thumbnails.
+// Uploads images found anywhere under <dir> to the photos bucket as originals plus generated thumbnails.
+// Every folder that directly contains images becomes one album. Its ID is the slugified path relative
+// to <dir> (e.g. trip/Day 1 -> trip-day-1); images directly in <dir> go in an album named after <dir>.
+// The original folder path is stored in album.json as "path" so clients can rebuild the folder tree.
 //
 //   node upload-photos.mjs <dir> --bucket <name> [--dry-run]
 //
 // Bucket name may also come from PHOTOS_BUCKET. AWS credentials come from the usual SDK sources.
 import { readdir, readFile, stat } from 'node:fs/promises';
-import { extname, join, parse, resolve } from 'node:path';
+import { basename, extname, join, parse, resolve } from 'node:path';
 import { parseArgs } from 'node:util';
 import { HeadObjectCommand, PutObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import sharp from 'sharp';
@@ -51,16 +54,17 @@ async function put(key, body, contentType, metadata) {
   await s3.send(new PutObjectCommand({ Bucket: bucket, Key: key, Body: body, ContentType: contentType, Metadata: metadata }));
 }
 
-async function albumMetadata(dir, fallbackTitle) {
+async function albumMetadata(dir, fallbackTitle, path) {
   try {
     const data = JSON.parse(await readFile(join(dir, 'album.json'), 'utf8'));
     if (data && typeof data === 'object' && !Array.isArray(data)) {
-      return { ...data, title: typeof data.title === 'string' && data.title.trim() ? data.title.trim() : fallbackTitle };
+      const title = typeof data.title === 'string' && data.title.trim() ? data.title.trim() : fallbackTitle;
+      return { ...data, title, path };
     }
   } catch (err) {
     if (err.code !== 'ENOENT') throw err;
   }
-  return { title: fallbackTitle };
+  return { title: fallbackTitle, path };
 }
 
 async function uploadImage(albumId, id, file, title) {
@@ -109,27 +113,43 @@ async function runPool(tasks, limit) {
   return results;
 }
 
-const albumDirs = (await readdir(srcDir, { withFileTypes: true }))
-  .filter((e) => e.isDirectory() && !e.name.startsWith('.'))
-  .map((e) => e.name)
-  .sort();
+// Depth-first walk yielding every directory that directly contains at least one image.
+async function* findAlbums(dir, segments) {
+  const entries = (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name));
+  const files = entries.filter((e) => e.isFile() && !e.name.startsWith('.') && extname(e.name).toLowerCase() in EXTENSIONS).map((e) => e.name);
+  if (files.length) yield { dir, segments, files };
+  for (const e of entries) {
+    if (e.isDirectory() && !e.name.startsWith('.')) yield* findAlbums(join(dir, e.name), [...segments, e.name]);
+  }
+}
 
-const counts = { uploaded: 0, unchanged: 0 };
-for (const name of albumDirs) {
-  const dir = join(srcDir, name);
-  const albumId = slug(name);
-  const files = (await readdir(dir)).filter((f) => extname(f).toLowerCase() in EXTENSIONS).sort();
+const usedAlbumIds = new Set();
+const counts = { uploaded: 0, unchanged: 0, failed: 0 };
+for await (const { dir, segments, files } of findAlbums(srcDir, [])) {
+  const leaf = segments.length ? segments : [basename(srcDir)];
+  const base = slug(leaf.join('/'));
+  let albumId = base;
+  for (let n = 2; usedAlbumIds.has(albumId); n++) albumId = `${base}-${n}`;
+  usedAlbumIds.add(albumId);
 
   const used = new Set();
   const tasks = files.map((file) => {
-    const base = parse(file).name;
-    let id = slug(base);
-    for (let n = 2; used.has(id); n++) id = `${slug(base)}-${n}`;
+    const name = parse(file).name;
+    let id = slug(name);
+    for (let n = 2; used.has(id); n++) id = `${slug(name)}-${n}`;
     used.add(id);
-    return () => uploadImage(albumId, id, join(dir, file), titleCase(base));
+    const path = join(dir, file);
+    return async () => {
+      try {
+        return await uploadImage(albumId, id, path, titleCase(name));
+      } catch (err) {
+        console.error(`failed: ${path}: ${err.message}`);
+        return 'failed';
+      }
+    };
   });
 
-  const meta = await albumMetadata(dir, titleCase(name));
+  const meta = await albumMetadata(dir, titleCase(leaf.at(-1)), segments);
   await put(`albums/${albumId}/album.json`, JSON.stringify(meta, null, 2), 'application/json');
 
   const results = await runPool(tasks, CONCURRENCY);
@@ -137,4 +157,5 @@ for (const name of albumDirs) {
   console.log(`${albumId}: ${files.length} image(s)`);
 }
 
-console.log(`${dryRun ? '[dry run] ' : ''}${counts.uploaded} uploaded, ${counts.unchanged} unchanged`);
+console.log(`${dryRun ? '[dry run] ' : ''}${counts.uploaded} uploaded, ${counts.unchanged} unchanged, ${counts.failed} failed`);
+if (counts.failed) process.exitCode = 1;

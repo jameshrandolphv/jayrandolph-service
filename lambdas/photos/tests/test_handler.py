@@ -140,3 +140,67 @@ def test_returns_folder_path_for_nested_albums(handler):
     assert albums["loose"]["path"] == []
     assert albums["legacy"]["path"] == ["Old One"]
     assert albums["bad"]["path"] == ["Bad"]
+
+
+def test_uses_images_json_instead_of_per_photo_metadata(handler, monkeypatch):
+    # Originals carry no width/height metadata, so listing them proves the index was used.
+    for stem in ("a", "b", "c"):
+        put(f"albums/album/originals/{stem}.jpg", b"x")
+        put(f"albums/album/thumbs/{stem}.webp", b"x")
+    index = {"a": {"width": 30, "height": 20, "title": "Alpha"}, "b": {"width": 0, "height": 5}, "c": "nope"}
+    put("albums/album/images.json", json.dumps(index).encode())
+
+    _, body = call(handler)
+    images = body["albums"][0]["images"]
+    assert [(i["id"], i["name"], i["width"], i["height"]) for i in images] == [("a", "Alpha", 30, 20)]
+
+
+def test_falls_back_to_object_metadata_for_photos_missing_from_index(handler):
+    add_photo("album", "indexed", width="1", height="1")
+    add_photo("album", "legacy", width="40", height="30")
+    put("albums/album/images.json", json.dumps({"indexed": {"width": 10, "height": 5}}).encode())
+
+    _, body = call(handler)
+    assert [(i["id"], i["width"], i["height"]) for i in body["albums"][0]["images"]] == [("indexed", 10, 5), ("legacy", 40, 30)]
+
+
+def test_bad_images_json_falls_back_to_object_metadata(handler):
+    add_photo("album", "a", width="7", height="8")
+    put("albums/album/images.json", b"not json")
+
+    _, body = call(handler)
+    assert [(i["width"], i["height"]) for i in body["albums"][0]["images"]] == [(7, 8)]
+
+
+def test_gzips_response_when_client_accepts_it(handler):
+    import base64
+    import gzip
+
+    add_photo("album", "a")
+    plain = handler.handler({}, None)
+    zipped = handler.handler({"headers": {"accept-encoding": "gzip, deflate, br"}}, None)
+
+    assert zipped["isBase64Encoded"] is True
+    assert zipped["headers"]["Content-Encoding"] == "gzip"
+    body = json.loads(gzip.decompress(base64.b64decode(zipped["body"])))
+    assert [a["id"] for a in body["albums"]] == [json.loads(plain["body"])["albums"][0]["id"]]
+    assert "isBase64Encoded" not in plain
+
+
+@pytest.mark.parametrize("token", [None, "sess/ion+token=="])
+def test_hand_signed_urls_match_botocore(handler, monkeypatch, token):
+    if token:
+        monkeypatch.setenv("AWS_SESSION_TOKEN", token)
+    handler._session = boto3.session.Session()
+    handler.s3 = handler._session.client("s3", region_name="us-east-1", config=handler.s3.meta.config)
+    keys = ["albums/a/originals/x.jpg", "albums/trip day/thumbs/we ird&name+(1)~é.webp"]
+
+    for _ in range(5):  # retry if the two signers straddle a second boundary
+        ours = handler._make_presigner()
+        theirs = [handler.s3.generate_presigned_url("get_object", Params={"Bucket": BUCKET, "Key": k}, ExpiresIn=600) for k in keys]
+        ours_urls = [ours(k) for k in keys]
+        if all(parse_qs(urlparse(a).query)["X-Amz-Date"] == parse_qs(urlparse(b).query)["X-Amz-Date"] for a, b in zip(ours_urls, theirs)):
+            break
+    for a, b in zip(ours_urls, theirs):
+        assert urlparse(a)[:3] == urlparse(b)[:3]
+        assert parse_qs(urlparse(a).query) == parse_qs(urlparse(b).query)

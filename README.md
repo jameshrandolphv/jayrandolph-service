@@ -12,13 +12,14 @@ Backend for [jayrandolph](https://github.com/jameshrandolphv/jayrandolph): photo
 
 ```
 albums/<album-id>/album.json            optional {"title": "...", "path": ["folder", ...], ...any extra metadata}
+albums/<album-id>/images.json           {"<id>": {"width": n, "height": n, "title": "..."}, ...} (written by the upload script)
 albums/<album-id>/originals/<id>.<ext>  original; user metadata: width, height, title
 albums/<album-id>/thumbs/<id>.webp      thumbnail
 ```
 
 Objects whose file name starts with `private-` (case-insensitive) are never listed or presigned. Add the prefix to both the original and its thumbnail (the upload script keeps a `private-` file name as is), or just the original.
 
-Use the upload script rather than uploading by hand: the Lambda skips photos that have no thumbnail or no `width`/`height` metadata (it logs a warning).
+Use the upload script rather than uploading by hand: the Lambda skips photos that have no thumbnail or no `width`/`height` (it logs a warning). The Lambda reads each album's `images.json` for dimensions and titles; photos missing from it fall back to one `HEAD` request each, which is slow for large libraries, so re-run the upload script after upgrading to write the indexes.
 
 ## API
 
@@ -51,7 +52,7 @@ Use the upload script rather than uploading by hand: the Lambda skips photos tha
 }
 ```
 
-`path` is the album's folder path under the uploaded source directory (raw folder names). Clients rebuild the folder tree from it: group albums by path prefix, where intermediate folders that hold no images exist only as path segments and an album's own folder is its last segment. `[]` is an album made of images placed directly in the source directory; albums without a stored path (uploaded earlier) come back as top-level, `[title]`. Everything in `album.json` other than `title` and `path` is returned as the album's `metadata`. Presigned URLs last `expiresIn` seconds (`PRESIGNED_URL_TTL`, set in `infra/lib/photography-stack.ts`); clients should refetch before `expiresAt` (epoch seconds). The Lambda's temporary credentials can cut a URL's life short, so refetch well before it.
+`path` is the album's folder path under the uploaded source directory (raw folder names). Clients rebuild the folder tree from it: group albums by path prefix, where intermediate folders that hold no images exist only as path segments and an album's own folder is its last segment. `[]` is an album made of images placed directly in the source directory; albums without a stored path (uploaded earlier) come back as top-level, `[title]`. Everything in `album.json` other than `title` and `path` is returned as the album's `metadata`. The response is gzip-compressed when the client sends `Accept-Encoding: gzip`, which keeps large libraries under Lambda's 6 MB response limit. Presigned URLs last `expiresIn` seconds (`PRESIGNED_URL_TTL`, set in `infra/lib/photography-stack.ts`); clients should refetch before `expiresAt` (epoch seconds). The Lambda's temporary credentials can cut a URL's life short, so refetch well before it.
 
 ## Deploy
 

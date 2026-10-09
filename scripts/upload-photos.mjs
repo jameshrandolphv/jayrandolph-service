@@ -2,6 +2,8 @@
 // Every folder that directly contains images becomes one album. Its ID is the slugified path relative
 // to <dir> (e.g. trip/Day 1 -> trip-day-1); images directly in <dir> go in an album named after <dir>.
 // The original folder path is stored in album.json as "path" so clients can rebuild the folder tree.
+// Each album also gets an images.json with every photo's dimensions and title, so the API can list
+// the album without a request per photo.
 //
 //   node upload-photos.mjs <dir> --bucket <name> [--dry-run]
 //
@@ -75,7 +77,8 @@ async function uploadImage(albumId, id, file, title) {
   const existing = await head(originalKey);
   const thumbExists = existing ? await head(thumbKey) : null;
   if (existing && thumbExists && existing.ContentLength === size && existing.Metadata?.width) {
-    return 'unchanged';
+    const { width, height, title: stored } = existing.Metadata;
+    return { status: 'unchanged', info: { width: Number(width), height: Number(height), title: stored ? decodeURIComponent(stored) : title } };
   }
 
   const image = sharp(file);
@@ -96,7 +99,7 @@ async function uploadImage(albumId, id, file, title) {
 
   await put(originalKey, await readFile(file), EXTENSIONS[extname(file).toLowerCase()], metadata);
   await put(thumbKey, thumb, 'image/webp');
-  return 'uploaded';
+  return { status: 'uploaded', info: { width: Number(metadata.width), height: Number(metadata.height), title } };
 }
 
 async function runPool(tasks, limit) {
@@ -133,18 +136,20 @@ for await (const { dir, segments, files } of findAlbums(srcDir, [])) {
   usedAlbumIds.add(albumId);
 
   const used = new Set();
+  const ids = [];
   const tasks = files.map((file) => {
     const name = parse(file).name;
     let id = slug(name);
     for (let n = 2; used.has(id); n++) id = `${slug(name)}-${n}`;
     used.add(id);
+    ids.push(id);
     const path = join(dir, file);
     return async () => {
       try {
         return await uploadImage(albumId, id, path, titleCase(name));
       } catch (err) {
         console.error(`failed: ${path}: ${err.message}`);
-        return 'failed';
+        return { status: 'failed' };
       }
     };
   });
@@ -153,7 +158,12 @@ for await (const { dir, segments, files } of findAlbums(srcDir, [])) {
   await put(`albums/${albumId}/album.json`, JSON.stringify(meta, null, 2), 'application/json');
 
   const results = await runPool(tasks, CONCURRENCY);
-  for (const r of results) counts[r]++;
+  const index = {};
+  results.forEach((r, i) => {
+    counts[r.status]++;
+    if (r.info) index[ids[i]] = r.info;
+  });
+  await put(`albums/${albumId}/images.json`, JSON.stringify(index), 'application/json');
   console.log(`${albumId}: ${files.length} image(s)`);
 }
 

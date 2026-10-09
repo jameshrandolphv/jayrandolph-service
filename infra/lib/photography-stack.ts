@@ -27,6 +27,8 @@ export class PhotographyStack extends cdk.Stack {
       enforceSSL: true,
       versioned: true,
       lifecycleRules: [{ noncurrentVersionExpiration: cdk.Duration.days(90) }],
+      // The site fetches originals via presigned URLs to load them into Film Sim.
+      cors: [{ allowedOrigins: allowedOrigins, allowedMethods: [s3.HttpMethods.GET], maxAge: 86400 }],
       removalPolicy: isProd ? cdk.RemovalPolicy.RETAIN : cdk.RemovalPolicy.DESTROY,
       autoDeleteObjects: !isProd,
     });
@@ -42,7 +44,7 @@ export class PhotographyStack extends cdk.Stack {
         PHOTOS_BUCKET_NAME: photosBucket.bucketName,
         PRESIGNED_URL_TTL: String(urlTtlSeconds),
       },
-      memorySize: 256,
+      memorySize: 1024,
       timeout: cdk.Duration.seconds(25),
       logGroup: new logs.LogGroup(this, 'ListPhotosLogs', {
         retention: logs.RetentionDays.ONE_MONTH,
